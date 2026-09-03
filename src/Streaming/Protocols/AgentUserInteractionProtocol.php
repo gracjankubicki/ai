@@ -212,12 +212,14 @@ class AgentUserInteractionProtocol extends StreamProtocol
     protected function runFinishedPart(array $attributes = []): array
     {
         $assistantMessageId = $this->response?->assistantMessageId;
+        $userMessageId = $this->response?->userMessageId;
 
         return [
             'type' => 'RUN_FINISHED',
             'threadId' => $this->threadId,
             'runId' => $this->runId,
             ...($assistantMessageId ? ['messageId' => $assistantMessageId] : []),
+            ...($userMessageId ? ['userMessageId' => $userMessageId] : []),
             ...$attributes,
         ];
     }
