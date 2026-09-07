@@ -49,6 +49,11 @@ class TextGenerationLoop
 {
     use HandlesToolApprovals, InvokesTools;
 
+    /**
+     * The characters a tool must add before its unfinished output is reported again.
+     */
+    private const PRELIMINARY_OUTPUT_BYTES = 240;
+
     private bool $repairsToolCalls = false;
 
     /**
@@ -290,6 +295,7 @@ class TextGenerationLoop
                 $result, $stepContext->isFinalStep, $tools, $invocationId, $options, $context,
             );
 
+            // Re-yielded rather than delegated so every event keeps a distinct key and iterator_to_array() drops none of them...
             foreach ($toolStream as $event) {
                 yield $event;
             }
@@ -364,12 +370,22 @@ class TextGenerationLoop
      */
     private function stepToolResultsWithOptions(StepResponse $result, bool $isFinalStep, array $tools, ?TextGenerationOptions $options, ?RunContext $context = null): array
     {
+        return $this->withRepairSetting(
+            $options, fn (): array => $this->stepToolResults($result, $isFinalStep, $tools, $context),
+        );
+    }
+
+    /**
+     * Run the given callback with the tool call repair setting the step's agent asks for.
+     */
+    private function withRepairSetting(?TextGenerationOptions $options, Closure $callback): mixed
+    {
         $repairsToolCalls = $this->repairsToolCalls;
 
         $this->repairsToolCalls = RepairToolCalls::isAppliedTo($options?->agent);
 
         try {
-            return $this->stepToolResults($result, $isFinalStep, $tools, $context);
+            return $callback();
         } finally {
             $this->repairsToolCalls = $repairsToolCalls;
         }
@@ -383,7 +399,7 @@ class TextGenerationLoop
      */
     protected function stepToolResults(StepResponse $result, bool $isFinalStep, array $tools, ?RunContext $context = null): array
     {
-        return $this->pausedOrEmptyStepToolResults($result)
+        return $this->earlyStepToolResults($result)
             ?? $this->approvalAwareToolResults($result->toolCalls, $tools, $isFinalStep, $context);
     }
 
@@ -392,7 +408,7 @@ class TextGenerationLoop
      *
      * @return array{array<int, ToolResult>, Collection<int, PendingApproval>}|null
      */
-    protected function pausedOrEmptyStepToolResults(StepResponse $result): ?array
+    protected function earlyStepToolResults(StepResponse $result): ?array
     {
         if (filled($result->pendingApprovals)) {
             return [[], collect($result->pendingApprovals)];
@@ -413,49 +429,70 @@ class TextGenerationLoop
      */
     protected function streamedStepToolResults(StepResponse $result, bool $isFinalStep, array $tools, string $invocationId, ?TextGenerationOptions $options = null, ?RunContext $context = null): Generator
     {
-        if (($earlyOutcome = $this->pausedOrEmptyStepToolResults($result)) !== null) {
+        if (($earlyOutcome = $this->earlyStepToolResults($result)) !== null) {
             return $earlyOutcome;
         }
 
-        $repairsToolCalls = $this->repairsToolCalls;
+        [$resolved, $pendingApprovals] = $this->withRepairSetting(
+            $options, fn (): array => $this->resolveToolCalls($result->toolCalls, $tools, $isFinalStep),
+        );
 
-        $this->repairsToolCalls = RepairToolCalls::isAppliedTo($options?->agent);
+        $toolResults = [];
 
-        try {
-            [$resolved, $pendingApprovals] = $this->resolveToolCalls($result->toolCalls, $tools, $isFinalStep);
+        foreach ($resolved as [$toolCall, $tool]) {
+            if (! $tool instanceof AgentTool || $isFinalStep) {
+                $toolResults[] = $this->withRepairSetting(
+                    $options, fn (): ToolResult => $this->resolvedToolResult($toolCall, $tool, $isFinalStep, $tools, $context),
+                );
 
-            $toolResults = [];
-
-            foreach ($resolved as [$toolCall, $tool]) {
-                if (! $tool instanceof AgentTool || $isFinalStep) {
-                    $toolResults[] = $this->resolvedToolResult($toolCall, $tool, $isFinalStep, $tools, $context);
-
-                    continue;
-                }
-
-                $generator = $this->executeAgentToolStreaming($tool, $toolCall->arguments, $toolCall->id, $context);
-
-                $subAgentEvents = [];
-
-                foreach ($generator as $event) {
-                    $subAgentEvents[] = $event;
-
-                    yield (new ToolResultEvent(
-                        $this->generateEventId(),
-                        $this->toolResult($toolCall, $event->toArray()),
-                        true,
-                        null,
-                        time(),
-                        preliminaryOutput: TextDelta::combine($subAgentEvents),
-                    ))->withInvocationId($invocationId);
-                }
-
-                $toolResults[] = $this->toolResult($toolCall, $generator->getReturn());
+                continue;
             }
 
-            return [$toolResults, $pendingApprovals];
-        } finally {
-            $this->repairsToolCalls = $repairsToolCalls;
+            $events = $this->executeAgentToolStreaming($tool, $toolCall->arguments, $toolCall->id, $context);
+
+            yield from $this->preliminaryToolResults($events, $toolCall, $invocationId);
+
+            $toolResults[] = $this->toolResult($toolCall, $events->getReturn());
+        }
+
+        return [$toolResults, $pendingApprovals];
+    }
+
+    /**
+     * Report the output a still running tool has produced so far.
+     *
+     * @param  Generator<int, StreamEvent, mixed, string>  $events
+     * @return Generator<int, ToolResultEvent>
+     */
+    protected function preliminaryToolResults(Generator $events, ToolCall $toolCall, string $invocationId): Generator
+    {
+        $deltas = [];
+        $written = 0;
+        $reportedAt = 0;
+
+        foreach ($events as $event) {
+            if ($event instanceof TextDelta) {
+                $deltas[] = $event;
+                $written += strlen($event->delta);
+
+                // Each report restates the whole output, so one per delta would grow the stream quadratically...
+                if ($written - $reportedAt < self::PRELIMINARY_OUTPUT_BYTES) {
+                    continue;
+                }
+            }
+
+            $reportedAt = $written;
+
+            $result = $this->toolResult($toolCall, TextDelta::combine($deltas));
+
+            yield (new ToolResultEvent(
+                $this->generateEventId(),
+                $result,
+                $result->successful(),
+                $result->error(),
+                time(),
+                preliminary: true,
+            ))->withInvocationId($invocationId);
         }
     }
 
@@ -467,19 +504,22 @@ class TextGenerationLoop
     protected function executeAgentToolStreaming(AgentTool $tool, array $arguments, ?string $toolCallId = null, ?RunContext $context = null): Generator
     {
         $toolInvocationId = (string) Str::uuid7();
+        $parentInvocationId = $context?->invocationId;
 
         $context?->invokingTool($tool, $arguments, $toolInvocationId);
 
         $startedAt = hrtime(true);
 
-        $generator = $tool->stream(new Request($arguments, $toolCallId, $toolInvocationId));
+        $events = $tool->stream(new Request($arguments, $toolCallId, $toolInvocationId));
 
-        // The child run reads its parent linkage when it starts, so the first advance runs with the parent invocation set...
-        ParentInvocation::within($context?->invocationId, $toolInvocationId, fn (): bool => $generator->valid());
+        // Advanced by hand so every resumption of the child run, not only the first, sees this tool call as its parent...
+        while (ParentInvocation::within($parentInvocationId, $toolInvocationId, fn (): bool => $events->valid())) {
+            yield $events->current();
 
-        yield from $generator;
+            ParentInvocation::within($parentInvocationId, $toolInvocationId, fn () => $events->next());
+        }
 
-        $result = (string) $generator->getReturn();
+        $result = (string) $events->getReturn();
 
         $context?->toolInvoked($tool, $arguments, $result, $toolInvocationId, $this->elapsedMilliseconds($startedAt));
 

@@ -451,29 +451,15 @@ test('a tool executed within the stream emits its input and output parts', funct
     ]);
 });
 
-test('sub-agent activity is emitted as preliminary tool output without changing the parent lifecycle', function () {
+test('a tool still producing its output emits preliminary parts without changing the run lifecycle', function () {
     $parts = vercelProtocolParts([
         new StreamStart('msg-1', 'anthropic', 'claude-sonnet-4-6', time()),
         new TextDelta('event-1', 'msg-1', 'Working on it.', time()),
         new ToolCall('event-2', new Data\ToolCall('call-1', 'document_specialist', ['task' => 'Report']), time()),
-        new ToolResult(
-            'event-3',
-            new Data\ToolResult('call-1', 'document_specialist', ['task' => 'Report'], [
-                'id' => 'nested-event',
-                'invocation_id' => null,
-                'type' => 'text_delta',
-                'message_id' => 'nested-msg',
-                'delta' => 'internal monologue',
-                'timestamp' => 100,
-            ]),
-            true,
-            null,
-            200,
-            preliminaryOutput: 'internal monologue',
-        ),
-        new ToolResult('event-6', new Data\ToolResult('call-1', 'document_specialist', ['task' => 'Report'], 'done'), true, null, time()),
-        new TextDelta('event-7', 'msg-1', ' Done.', time()),
-        new StreamEnd('event-8', 'stop', new Usage, time()),
+        new ToolResult('event-3', new Data\ToolResult('call-1', 'document_specialist', ['task' => 'Report'], 'internal monologue'), true, null, 200, preliminary: true),
+        new ToolResult('event-4', new Data\ToolResult('call-1', 'document_specialist', ['task' => 'Report'], 'done'), true, null, time()),
+        new TextDelta('event-5', 'msg-1', ' Done.', time()),
+        new StreamEnd('event-6', 'stop', new Usage, time()),
     ]);
 
     expect($parts)->toBe([

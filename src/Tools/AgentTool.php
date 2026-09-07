@@ -50,7 +50,7 @@ class AgentTool implements Tool
             return $this->agent->prompt((string) $request['task'])->text;
         } catch (Throwable $throwable) {
             // Degraded to a result so the parent run survives; the failure surfaces as the sub-agent's own AgentFailed...
-            return $this->failureResult($throwable);
+            return 'Agent failed: '.$throwable->getMessage();
         }
     }
 
@@ -68,16 +68,8 @@ class AgentTool implements Tool
 
             return (string) $stream->text;
         } catch (Throwable $throwable) {
-            return $this->failureResult($throwable);
+            return 'Agent failed: '.$throwable->getMessage();
         }
-    }
-
-    /**
-     * Get the tool result describing the sub-agent's failure.
-     */
-    protected function failureResult(Throwable $throwable): string
-    {
-        return 'Agent failed: '.$throwable->getMessage();
     }
 
     /**
