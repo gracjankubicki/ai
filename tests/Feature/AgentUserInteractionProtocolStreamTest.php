@@ -1,8 +1,12 @@
 <?php
 
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Exceptions;
+use Illuminate\Support\Facades\Http;
+use Laravel\Ai\Approvals\Decisions;
 use Laravel\Ai\Approvals\PendingApproval;
 use Laravel\Ai\Contracts\ConversationStore;
+use Laravel\Ai\Exceptions\ApprovalMismatchException;
 use Laravel\Ai\Exceptions\StreamErrorException;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data;
@@ -441,6 +445,43 @@ test('a paused run reports its interrupt outcome even when the stream later thro
     ])->and($events[3]['outcome']['interrupts'][0]['id'])->toBe('call-1');
 
     Exceptions::assertReported(RuntimeException::class);
+});
+
+test('a resume the store cannot match ends the real stream with the mismatch code', function () {
+    Config::set('ai.conversations.generate_title', false);
+
+    Exceptions::fake();
+
+    Http::fake(['api.anthropic.com/*' => Http::sequence()
+        ->push([
+            'id' => 'msg_tool_1', 'type' => 'message', 'role' => 'assistant', 'model' => 'claude-sonnet-4-6',
+            'content' => [['type' => 'tool_use', 'id' => 'toolu_1', 'name' => 'ApprovableNumberGenerator', 'input' => (object) []]],
+            'stop_reason' => 'tool_use', 'usage' => ['input_tokens' => 10, 'output_tokens' => 5],
+        ])
+        ->push([
+            'id' => 'msg_2', 'type' => 'message', 'role' => 'assistant', 'model' => 'claude-sonnet-4-6',
+            'content' => [['type' => 'text', 'text' => 'The number is 72019.']],
+            'stop_reason' => 'end_turn', 'usage' => ['input_tokens' => 10, 'output_tokens' => 5],
+        ]),
+    ]);
+
+    $paused = (new RememberingApprovableAgent)->forUser((object) ['id' => 1])->prompt('Generate a number', provider: 'anthropic');
+
+    // The paused row belongs to user 1, but history loads by conversation alone, so the resume validates and then finds no row to write to...
+    $events = agUiEvents((new RememberingApprovableAgent)
+        ->continue($paused->conversationId, (object) ['id' => 2])
+        ->stream(Decisions::from(['toolu_1' => true]), provider: 'anthropic')
+        ->usingAgentUserInteractionProtocol('thread-1', 'run-1')
+        ->toResponse(request()));
+
+    expect(collect($events)->pluck('type')->all())->toBe(['RUN_STARTED', 'STEP_STARTED', 'RUN_ERROR'])
+        ->and($events[2])->toBe([
+            'type' => 'RUN_ERROR',
+            'message' => 'The approval results do not match a paused conversation turn.',
+            'code' => 'approval_mismatch',
+        ]);
+
+    Exceptions::assertReported(ApprovalMismatchException::class);
 });
 
 test('a pending approval without a reason omits the interrupt message', function () {
