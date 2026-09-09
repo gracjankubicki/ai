@@ -152,17 +152,6 @@ class AgentUserInteractionProtocol extends StreamProtocol
     }
 
     /**
-     * {@inheritdoc}
-     */
-    protected function headers(): array
-    {
-        return [
-            'Cache-Control' => 'no-cache, no-transform',
-            'Content-Type' => 'text/event-stream',
-        ];
-    }
-
-    /**
      * Get the given protocol part, preceded by the run started events when the run has not begun yet.
      *
      * @param  array<string, mixed>  $part
