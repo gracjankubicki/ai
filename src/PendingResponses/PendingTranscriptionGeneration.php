@@ -119,6 +119,7 @@ class PendingTranscriptionGeneration
                     $this->diarize,
                     $provider,
                     $model,
+                    $this->timeout,
                     $this->queuedProviderOptions(),
                 )
             );
