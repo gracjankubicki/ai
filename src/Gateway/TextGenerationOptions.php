@@ -26,6 +26,7 @@ class TextGenerationOptions
         public readonly ?ToolChoice $toolChoice = null,
         public readonly ?CacheInstructions $cacheInstructions = null,
         public readonly ?CacheToolDefinitions $cacheToolDefinitions = null,
+        public readonly ?array $providerOptions = null,
     ) {
         //
     }
@@ -37,15 +38,53 @@ class TextGenerationOptions
      */
     public function providerOptions(Lab|string $provider): ?array
     {
-        if (! $this->agent instanceof HasProviderOptions) {
-            return null;
+        $agentOptions = $this->agent instanceof HasProviderOptions
+            ? Arr::except($this->agent->providerOptions(
+                $provider instanceof Lab ? $provider : (Lab::tryFrom($provider) ?? $provider)
+            ), HasProviderOptions::HEADERS)
+            : null;
+
+        if ($this->providerOptions === null) {
+            return $agentOptions;
         }
 
-        $options = $this->agent->providerOptions(
-            $provider instanceof Lab ? $provider : (Lab::tryFrom($provider) ?? $provider)
-        );
+        return [...($agentOptions ?? []), ...Arr::except($this->providerOptions, HasProviderOptions::HEADERS)];
+    }
 
-        return Arr::except($options, HasProviderOptions::HEADERS);
+    /**
+     * Create a copy using a different tool choice.
+     */
+    public function withToolChoice(?ToolChoice $toolChoice): self
+    {
+        return $this->with(['toolChoice' => $toolChoice]);
+    }
+
+    /**
+     * Create a copy using a different maximum token count.
+     */
+    public function withMaxTokens(?int $maxTokens): self
+    {
+        return $this->with(['maxTokens' => $maxTokens]);
+    }
+
+    /**
+     * Create a copy using different provider options.
+     *
+     * @param  array<string, mixed>|null  $providerOptions
+     */
+    public function withProviderOptions(?array $providerOptions): self
+    {
+        return $this->with(['providerOptions' => $providerOptions]);
+    }
+
+    /**
+     * Create a copy with the given property overrides.
+     *
+     * @param  array<string, mixed>  $overrides
+     */
+    protected function with(array $overrides): self
+    {
+        return new self(...[...get_object_vars($this), ...$overrides]);
     }
 
     /**
@@ -61,15 +100,7 @@ class TextGenerationOptions
             return $this;
         }
 
-        return new self(
-            maxSteps: $this->maxSteps,
-            maxTokens: $this->maxTokens,
-            temperature: $this->temperature,
-            agent: $this->agent,
-            topP: $this->topP,
-            cacheInstructions: $this->cacheInstructions,
-            cacheToolDefinitions: $this->cacheToolDefinitions,
-        );
+        return $this->withToolChoice(null);
     }
 
     /**

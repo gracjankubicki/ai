@@ -12,6 +12,7 @@ use Laravel\Ai\Responses\Data\Usage;
 use Laravel\Ai\Streaming\Events\ReasoningDelta;
 use Laravel\Ai\Streaming\Events\StreamEnd;
 use Laravel\Ai\Streaming\Events\StreamEvent;
+use Laravel\Ai\Streaming\Events\StreamStart;
 use Laravel\Ai\Streaming\Events\TextDelta;
 use Laravel\Ai\Streaming\Protocols\AgentUserInteractionProtocol;
 use Laravel\Ai\Streaming\Protocols\StreamProtocol;
@@ -204,6 +205,12 @@ class StreamableAgentResponse implements IteratorAggregate, Responsable
         $this->text = TextDelta::combine($events);
         $this->reasoning = ReasoningDelta::combine($events);
         $this->usage = StreamEnd::combineUsage($events);
+
+        $start = $this->events->last(fn (StreamEvent $event): bool => $event instanceof StreamStart);
+
+        if ($start instanceof StreamStart && $this->meta instanceof Meta) {
+            $this->meta->model = $start->model;
+        }
 
         $this->streamedResponse = new StreamedAgentResponse(
             $this->invocationId,
