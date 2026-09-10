@@ -419,7 +419,22 @@ describe('hydrating AG-UI from stored messages', function () {
         ])['messages'];
 
         expect($messages[1]['content'])->toBe('The tool call was denied.')
-            ->and($messages[1]['error'])->toBe('The tool call was denied.');
+            ->and($messages[1]['error'])->toBe('The tool call was denied.')
+            ->and($messages[1]['metadata'])->toBe(['denied' => true]);
+    });
+
+    test('a failed tool call hydrates as a tool error without the denied flag', function () {
+        $messages = AgentUserInteraction::toClientState([
+            new ConversationMessage([
+                'id' => 'msg-2',
+                'role' => 'assistant',
+                'tool_calls' => [['id' => 'call-1', 'name' => 'ReadFile', 'arguments' => ['path' => 'a.txt']]],
+                'tool_results' => [['id' => 'call-1', 'name' => 'ReadFile', 'arguments' => ['path' => 'a.txt'], 'result' => 'The tool call failed: boom.', 'failed' => true]],
+            ]),
+        ])['messages'];
+
+        expect($messages[1]['error'])->toBe('The tool call failed: boom.')
+            ->and($messages[1])->not->toHaveKey('metadata');
     });
 
     test('a paused turn hydrates its pending approvals as interrupts', function () {
@@ -472,7 +487,7 @@ describe('hydrating AG-UI from stored messages', function () {
             'id' => 'msg-2',
             'role' => 'assistant',
             'approval_state' => ['pending' => ['call-1' => null]],
-        ])]))->toHaveCount(1);
+        ])])[0]['metadata'])->toEqual(['kind' => 'approval', 'toolName' => '', 'input' => (object) []]);
     });
 
     test('message objects hydrate alongside conversation models', function () {

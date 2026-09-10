@@ -4,6 +4,7 @@ namespace Laravel\Ai\Streaming\Protocols;
 
 use Generator;
 use Illuminate\Support\Arr;
+use Laravel\Ai\AgentUserInteraction\AgentUserInteraction;
 use Laravel\Ai\Approvals\PendingApproval;
 use Laravel\Ai\Exceptions\ApprovalMismatchException;
 use Laravel\Ai\Responses\Data;
@@ -253,17 +254,11 @@ class AgentUserInteractionProtocol extends StreamProtocol
      */
     protected function interrupts(ToolApprovalRequest $event): array
     {
-        return $event->pendingApprovals->map(fn (PendingApproval $approval) => Arr::whereNotNull([
-            'id' => $approval->id,
-            'reason' => 'tool_call',
-            'message' => $approval->reason,
-            'toolCallId' => $approval->id,
-            'responseSchema' => [
-                'type' => 'object',
-                'properties' => ['approved' => ['type' => 'boolean']],
-                'required' => ['approved'],
-            ],
-        ]))->all();
+        return $event->pendingApprovals
+            ->map(fn (PendingApproval $approval) => AgentUserInteraction::interrupt(
+                $approval->id, $approval->reason, $approval->tool, $approval->arguments,
+            ))
+            ->all();
     }
 
     /**

@@ -270,7 +270,7 @@ class AgentUserInteraction
             'toolCallId' => $id,
             'metadata' => [
                 'kind' => 'approval',
-                ...(filled($tool) ? ['toolName' => $tool] : []),
+                'toolName' => (string) $tool,
                 'input' => (object) $arguments,
             ],
             'responseSchema' => [
@@ -290,6 +290,7 @@ class AgentUserInteraction
     protected static function toolMessageFrom(array $toolResult, ?string $messageId = null): array
     {
         $denied = ($toolResult['denied'] ?? false) === true;
+        $failed = ($toolResult['failed'] ?? false) === true;
 
         $content = match (true) {
             $denied => 'The tool call was denied.',
@@ -302,7 +303,8 @@ class AgentUserInteraction
             'role' => 'tool',
             'toolCallId' => $toolResult['id'],
             'content' => $content,
-            ...($denied ? ['error' => $content] : []),
+            ...($denied || $failed ? ['error' => $content] : []),
+            ...($denied ? ['metadata' => ['denied' => true]] : []),
         ];
     }
 
