@@ -265,12 +265,14 @@ class AgentUserInteraction
     {
         return [
             'id' => $id,
+            // TanStack only resolves approvals reasoned this way, so it wins over AG-UI's core "tool_call"...
             'reason' => 'approval_required',
             ...(filled($reason) ? ['message' => $reason] : []),
             'toolCallId' => $id,
             'metadata' => [
                 'kind' => 'approval',
-                ...(filled($tool) ? ['toolName' => $tool] : []),
+                // A missing tool name would leave the interrupt unmatched by TanStack, and so unapprovable...
+                'toolName' => (string) $tool,
                 'input' => (object) $arguments,
             ],
             'responseSchema' => [
@@ -290,6 +292,7 @@ class AgentUserInteraction
     protected static function toolMessageFrom(array $toolResult, ?string $messageId = null): array
     {
         $denied = ($toolResult['denied'] ?? false) === true;
+        $failed = ($toolResult['failed'] ?? false) === true;
 
         $content = match (true) {
             $denied => 'The tool call was denied.',
@@ -302,7 +305,9 @@ class AgentUserInteraction
             'role' => 'tool',
             'toolCallId' => $toolResult['id'],
             'content' => $content,
-            ...($denied ? ['error' => $content] : []),
+            ...($denied || $failed ? ['error' => $content] : []),
+            // The AG-UI tool message has an error field but no denied field, so refusal rides metadata as it does live...
+            ...($denied ? ['metadata' => ['denied' => true]] : []),
         ];
     }
 

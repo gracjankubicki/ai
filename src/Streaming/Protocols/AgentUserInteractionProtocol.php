@@ -7,8 +7,6 @@ use Illuminate\Support\Arr;
 use Laravel\Ai\AgentUserInteraction\AgentUserInteraction;
 use Laravel\Ai\Approvals\PendingApproval;
 use Laravel\Ai\Exceptions\ApprovalMismatchException;
-use Laravel\Ai\Messages\Message;
-use Laravel\Ai\Models\ConversationMessage;
 use Laravel\Ai\Responses\Data;
 use Laravel\Ai\Responses\Data\UrlCitation;
 use Laravel\Ai\Responses\Data\Usage;
@@ -28,7 +26,6 @@ use Laravel\Ai\Streaming\Events\TextStart;
 use Laravel\Ai\Streaming\Events\ToolApprovalRequest;
 use Laravel\Ai\Streaming\Events\ToolCall;
 use Laravel\Ai\Streaming\Events\ToolResult;
-use Symfony\Component\HttpFoundation\Response;
 
 use function Laravel\Ai\ulid;
 
@@ -50,36 +47,6 @@ class AgentUserInteractionProtocol extends StreamProtocol
         protected ?string $runId = null,
     ) {
         //
-    }
-
-    /**
-     * Create an HTTP response that hydrates a client from stored messages as a snapshot run.
-     *
-     * @param  iterable<int, Message|ConversationMessage>  $messages
-     */
-    public function snapshotResponse(iterable $messages): Response
-    {
-        $state = AgentUserInteraction::toClientState($messages);
-
-        return response()->stream(function () use ($state) {
-            $this->threadId ??= ulid();
-            $this->runId ??= ulid();
-
-            yield $this->encode([
-                'type' => 'RUN_STARTED',
-                'threadId' => $this->threadId,
-                'runId' => $this->runId,
-            ]);
-
-            yield $this->encode([
-                'type' => 'MESSAGES_SNAPSHOT',
-                'messages' => $state['messages'],
-            ]);
-
-            yield $this->encode($this->runFinishedPart($state['interrupts'] === [] ? [] : [
-                'outcome' => ['type' => 'interrupt', 'interrupts' => $state['interrupts']],
-            ]));
-        }, headers: $this->headers());
     }
 
     /**
@@ -276,7 +243,7 @@ class AgentUserInteractionProtocol extends StreamProtocol
                 'reasoningTokens' => $usage->reasoningTokens,
                 'cachedInputTokens' => $usage->cacheReadInputTokens,
             ])]] : []),
-            ...($reason !== null ? ['metadata' => ['finishReason' => $reason]] : []),
+            ...($reason === null ? [] : ['metadata' => ['finishReason' => $reason]]),
         ];
     }
 
